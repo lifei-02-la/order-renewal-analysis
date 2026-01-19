@@ -1,20 +1,22 @@
-# -*- coding: utf-8 -*-
-"""
-Spyder 编辑器
-
-这是一个临时脚本文件。
-"""
-
 import pandas as pd
 import streamlit as st
 import numpy as np
 from io import BytesIO
 from datetime import datetime
 
-# ==================== 核心处理函数 ====================
+# ==================== 数据缓存 ====================
+@st.cache_data
+def load_data(uploaded_file):
+    """缓存数据读取"""
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
+    return df
 
+@st.cache_data
 def process_data(df):
-    """主数据处理函数"""
+    """缓存数据处理结果"""
     
     # 确保时间格式正确
     date_cols = ['订单提交时间', '合作开始时间', '合作到期时间']
@@ -27,7 +29,6 @@ def process_data(df):
     addon_df = df[df['附属产品'] == '按量计费加油包(1000份)'].copy()
     
     if len(base_df) == 0:
-        st.error("❌ 数据中没有找到「按量计费基础版」订单")
         return None
     
     # 2. 按客户ID + 合作到期时间 聚合加油包
@@ -35,7 +36,7 @@ def process_data(df):
         addon_agg = addon_df.groupby(['客户ID', '合作到期时间']).agg({
             '签约金额': 'sum',
             '购买份数': 'sum',
-            '订单号': 'count'  # 加油包订单数
+            '订单号': 'count'
         }).rename(columns={
             '签约金额': '加油包金额',
             '购买份数': '加油包份数',
@@ -51,7 +52,6 @@ def process_data(df):
         how='left'
     )
     
-    # 填充空值
     result['加油包金额'] = result['加油包金额'].fillna(0)
     result['加油包份数'] = result['加油包份数'].fillna(0).astype(int)
     result['加油包订单数'] = result['加油包订单数'].fillna(0).astype(int)
@@ -60,7 +60,6 @@ def process_data(df):
     result['订单总金额'] = result['签约金额'] + result['加油包金额']
     result['订单总份数'] = result['购买份数'] + result['加油包份数']
     
-    # 重命名字段以便区分
     result = result.rename(columns={
         '签约金额': '基础版签约金额',
         '购买份数': '基础版份数',
@@ -78,10 +77,7 @@ def process_data(df):
 
 
 def calculate_renewal(df):
-    """
-    计算续费相关字段
-    规则：当前订单的【合作结束时间】之后，是否有该客户的基础版订单
-    """
+    """计算续费相关字段"""
     
     df = df.sort_values(['客户ID', '合作结束时间']).reset_index(drop=True)
     
@@ -90,10 +86,8 @@ def calculate_renewal(df):
     for idx, row in df.iterrows():
         customer_id = row['客户ID']
         current_end = row['合作结束时间']
-        current_submit = row['订单提交时间']
         current_base_amount = row['基础版签约金额']
         
-        # 查找该客户【合作结束时间 > 当前订单合作结束时间】的订单
         future_orders = df[
             (df['客户ID'] == customer_id) & 
             (df['合作结束时间'] > current_end)
@@ -103,7 +97,6 @@ def calculate_renewal(df):
             next_order = future_orders.iloc[0]
             is_renewed = '是'
             
-            # 续费间隔 = 续费订单提交时间 - 当前订单结束时间（可能为负数）
             if pd.notna(next_order['订单提交时间']) and pd.notna(current_end):
                 renewal_interval = (next_order['订单提交时间'] - current_end).days
             else:
@@ -114,7 +107,6 @@ def calculate_renewal(df):
             renewal_submit_time = next_order['订单提交时间']
             renewal_end_time = next_order['合作结束时间']
             
-            # 判断升降档
             if renewal_base > current_base_amount:
                 change_type = '升档'
             elif renewal_base < current_base_amount:
@@ -144,8 +136,6 @@ def calculate_renewal(df):
     return pd.concat([df.reset_index(drop=True), renewal_df], axis=1)
 
 
-# ==================== 档位划分函数 ====================
-
 def add_tier_interval(df, amount_col='基础版签约金额'):
     """方式1：区间划分"""
     bins = [0, 1000, 2000, 3500, 5000, float('inf')]
@@ -155,7 +145,7 @@ def add_tier_interval(df, amount_col='基础版签约金额'):
 
 
 def add_tier_nearest(df, amount_col='基础版签约金额'):
-    """方式2：就近匹配到 1000, 2000, 3500, 5000"""
+    """方式2：就近匹配"""
     tiers = [1000, 2000, 3500, 5000]
     
     def find_nearest(value):
@@ -167,8 +157,6 @@ def add_tier_nearest(df, amount_col='基础版签约金额'):
     df['金额档位(就近)'] = df[amount_col].apply(find_nearest)
     return df
 
-
-# ==================== 统计函数 ====================
 
 def generate_stats(df, group_col):
     """生成分组统计"""
@@ -211,97 +199,116 @@ def main():
     )
     
     if uploaded_file:
-        # 读取数据
         try:
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
+            df = load_data(uploaded_file)
             st.sidebar.success(f"✅ 已加载 {len(df)} 条原始记录")
             
-            # 显示原始数据概览
             with st.sidebar.expander("📋 原始数据概览"):
                 base_count = len(df[df['附属产品'] == '按量计费基础版'])
                 addon_count = len(df[df['附属产品'] == '按量计费加油包(1000份)'])
                 st.write(f"基础版订单: {base_count} 条")
                 st.write(f"加油包订单: {addon_count} 条")
                 st.write(f"客户数: {df['客户ID'].nunique()}")
-            
+                
         except Exception as e:
             st.error(f"❌ 文件读取失败: {str(e)}")
             return
         
-        # 处理数据
+        # 处理数据（有缓存）
         with st.spinner("🔄 正在处理数据..."):
             result = process_data(df)
         
         if result is None:
+            st.error("❌ 数据中没有找到「按量计费基础版」订单")
             return
             
         st.sidebar.success(f"✅ 处理完成，共 {len(result)} 条基础版订单")
         
-        # ========== 侧边栏：筛选器 ==========
+        # ========== 侧边栏：筛选器（使用表单避免实时刷新） ==========
         st.sidebar.header("🔍 筛选条件")
+        st.sidebar.caption("设置好条件后点击「应用筛选」")
         
-        # 时间筛选
-        date_dimension = st.sidebar.selectbox(
-            "时间筛选维度",
-            ["订单提交时间", "合作开始时间", "合作结束时间"]
-        )
-        
-        valid_dates = result[date_dimension].dropna()
-        if len(valid_dates) > 0:
-            min_date = valid_dates.min().date()
-            max_date = valid_dates.max().date()
+        with st.sidebar.form(key='filter_form'):
+            # 时间筛选
+            date_dimension = st.selectbox(
+                "时间筛选维度",
+                ["订单提交时间", "合作开始时间", "合作结束时间"]
+            )
             
-            date_range = st.sidebar.date_input(
-                "选择日期范围",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date
+            valid_dates = result[date_dimension].dropna()
+            if len(valid_dates) > 0:
+                min_date = valid_dates.min().date()
+                max_date = valid_dates.max().date()
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_date = st.date_input(
+                        "开始日期",
+                        value=min_date,
+                        min_value=min_date,
+                        max_value=max_date
+                    )
+                with col2:
+                    end_date = st.date_input(
+                        "结束日期",
+                        value=max_date,
+                        min_value=min_date,
+                        max_value=max_date
+                    )
+            else:
+                start_date = None
+                end_date = None
+            
+            st.divider()
+            
+            # 续费状态筛选
+            renewal_filter = st.multiselect(
+                "续费状态",
+                options=['是', '否'],
+                default=['是', '否']
             )
-        else:
-            date_range = None
-        
-        # 续费状态筛选
-        renewal_filter = st.sidebar.multiselect(
-            "续费状态",
-            options=['是', '否'],
-            default=['是', '否']
-        )
-        
-        # 档位变化筛选
-        change_filter = st.sidebar.multiselect(
-            "档位变化",
-            options=['升档', '降档', '不变', '流失'],
-            default=['升档', '降档', '不变', '流失']
-        )
-        
-        # 客户类型筛选
-        if '客户类型' in result.columns:
-            customer_types = result['客户类型'].dropna().unique().tolist()
-            type_filter = st.sidebar.multiselect(
-                "客户类型",
-                options=customer_types,
-                default=customer_types
+            
+            # 档位变化筛选
+            change_filter = st.multiselect(
+                "档位变化",
+                options=['升档', '降档', '不变', '流失'],
+                default=['升档', '降档', '不变', '流失']
             )
-        else:
-            type_filter = None
+            
+            # 客户类型筛选
+            if '客户类型' in result.columns:
+                customer_types = result['客户类型'].dropna().unique().tolist()
+                type_filter = st.multiselect(
+                    "客户类型",
+                    options=customer_types,
+                    default=customer_types
+                )
+            else:
+                type_filter = None
+            
+            st.divider()
+            
+            # 🔘 提交按钮
+            submit_button = st.form_submit_button(
+                label="🔍 应用筛选",
+                use_container_width=True,
+                type="primary"
+            )
         
-        # 应用筛选
+        # ========== 应用筛选 ==========
         filtered = result.copy()
         
-        if date_range and len(date_range) == 2:
+        if start_date and end_date:
             filtered = filtered[
-                (filtered[date_dimension].dt.date >= date_range[0]) &
-                (filtered[date_dimension].dt.date <= date_range[1])
+                (filtered[date_dimension].dt.date >= start_date) &
+                (filtered[date_dimension].dt.date <= end_date)
             ]
         
-        filtered = filtered[
-            (filtered['是否续费'].isin(renewal_filter)) &
-            (filtered['档位变化'].isin(change_filter))
-        ]
+        if renewal_filter:
+            filtered = filtered[filtered['是否续费'].isin(renewal_filter)]
+        
+        if change_filter:
+            filtered = filtered[filtered['档位变化'].isin(change_filter)]
         
         if type_filter and '客户类型' in filtered.columns:
             filtered = filtered[filtered['客户类型'].isin(type_filter)]
@@ -336,7 +343,6 @@ def main():
         with tab1:
             st.subheader(f"筛选后数据：{len(filtered)} 条")
             
-            # 选择显示的列
             display_cols = [
                 '客户ID', '客户名称', '客户类型', '客户学段',
                 '订单提交时间', '合作开始时间', '合作结束时间',
@@ -349,7 +355,6 @@ def main():
                 '金额档位(区间)', '金额档位(就近)',
                 '签约类型', '所在营销中心', '网校通业务代表'
             ]
-            # 只显示存在的列
             display_cols = [c for c in display_cols if c in filtered.columns]
             
             st.dataframe(
@@ -362,7 +367,6 @@ def main():
             st.subheader("📈 按金额区间统计")
             stats1 = generate_stats(filtered, '金额档位(区间)')
             
-            # 格式化显示
             display_stats1 = stats1.copy()
             display_stats1['订单总金额'] = display_stats1['订单总金额'].apply(lambda x: f"¥{x:,.0f}")
             display_stats1['基础版金额合计'] = display_stats1['基础版金额合计'].apply(lambda x: f"¥{x:,.0f}")
@@ -372,7 +376,6 @@ def main():
             
             st.dataframe(display_stats1, use_container_width=True, hide_index=True)
             
-            # 可视化
             col1, col2 = st.columns(2)
             with col1:
                 st.write("**订单数分布**")
@@ -422,17 +425,12 @@ def main():
         # ========== 下载按钮 ==========
         st.sidebar.header("📥 导出数据")
         
-        # 导出Excel（多Sheet）
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # 明细数据
             export_cols = [c for c in display_cols if c in filtered.columns]
             filtered[export_cols].to_excel(writer, sheet_name='明细数据', index=False)
-            
-            # 统计数据
             stats1.to_excel(writer, sheet_name='区间档位统计', index=False)
             stats2.to_excel(writer, sheet_name='就近档位统计', index=False)
-            
             if '客户类型' in filtered.columns:
                 stats3.to_excel(writer, sheet_name='客户类型统计', index=False)
         
@@ -443,17 +441,7 @@ def main():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
-        # 单独下载明细
-        csv_data = filtered[export_cols].to_csv(index=False).encode('utf-8-sig')
-        st.sidebar.download_button(
-            label="📥 下载明细CSV",
-            data=csv_data,
-            file_name=f"订单明细_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
-        
     else:
-        # 未上传文件时显示说明
         st.info("👈 请在左侧上传CSV或Excel文件开始分析")
         
         col1, col2 = st.columns(2)
@@ -477,17 +465,15 @@ def main():
             st.subheader("🔧 功能说明")
             st.markdown("""
             **数据处理：**
-            - 同一客户ID + 同一合作到期时间的基础版和加油包合并为一个订单
+            - 同客户ID + 同合作到期时间的基础版和加油包合并
             - 自动计算订单总金额、总份数
             
             **续费判断：**
-            - 当前订单的合作结束时间之后，是否有该客户新的基础版订单
+            - 合作结束后是否有新的基础版订单
             - 续费间隔 = 续费订单提交时间 - 当前订单结束时间
             
             **档位分析：**
-            - 升档：续费金额 > 当前金额
-            - 降档：续费金额 < 当前金额
-            - 流失：无续费订单
+            - 升档/降档/不变/流失
             """)
 
 
