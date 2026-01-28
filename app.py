@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, time
 
 # ==================== 数据缓存 ====================
 @st.cache_data
@@ -237,27 +237,53 @@ def main():
             
             valid_dates = result[date_dimension].dropna()
             if len(valid_dates) > 0:
-                min_date = valid_dates.min().date()
-                max_date = valid_dates.max().date()
+                min_date = valid_dates.min()
+                max_date = valid_dates.max()
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    start_date = st.date_input(
-                        "开始日期",
-                        value=min_date,
+                    start_datetime = st.datetime_input(
+                        "开始日期时间 (可选: >= 此时间)",
+                        value=None,
                         min_value=min_date,
                         max_value=max_date
                     )
                 with col2:
-                    end_date = st.date_input(
-                        "结束日期",
-                        value=max_date,
+                    end_datetime = st.datetime_input(
+                        "结束日期时间 (可选: <= 此时间)",
+                        value=None,
                         min_value=min_date,
                         max_value=max_date
                     )
             else:
-                start_date = None
-                end_date = None
+                start_datetime = None
+                end_datetime = None
+            
+            st.divider()
+            
+            # 新增：基础版签约金额筛选
+            if '基础版签约金额' in result.columns:
+                amount_col = '基础版签约金额'
+                min_amount = float(result[amount_col].min())
+                max_amount = float(result[amount_col].max())
+                
+                st.subheader("💰 基础版签约金额筛选")
+                amount_range = st.slider(
+                    "金额范围",
+                    min_value=min_amount,
+                    max_value=max_amount,
+                    value=(min_amount, max_amount)
+                )
+                
+                unique_amounts = sorted(result[amount_col].unique())
+                amount_filter = st.multiselect(
+                    "特定金额值",
+                    options=unique_amounts,
+                    default=[]
+                )
+            else:
+                amount_range = None
+                amount_filter = None
             
             st.divider()
             
@@ -298,11 +324,20 @@ def main():
         # ========== 应用筛选 ==========
         filtered = result.copy()
         
-        if start_date and end_date:
+        # 时间筛选：支持开区间
+        if start_datetime:
+            filtered = filtered[filtered[date_dimension] >= start_datetime]
+        if end_datetime:
+            filtered = filtered[filtered[date_dimension] <= end_datetime]
+        
+        # 金额筛选
+        if amount_range and '基础版签约金额' in filtered.columns:
             filtered = filtered[
-                (filtered[date_dimension].dt.date >= start_date) &
-                (filtered[date_dimension].dt.date <= end_date)
+                (filtered['基础版签约金额'] >= amount_range[0]) &
+                (filtered['基础版签约金额'] <= amount_range[1])
             ]
+        if amount_filter and '基础版签约金额' in filtered.columns:
+            filtered = filtered[filtered['基础版签约金额'].isin(amount_filter)]
         
         if renewal_filter:
             filtered = filtered[filtered['是否续费'].isin(renewal_filter)]
@@ -353,7 +388,8 @@ def main():
                 '续费订单提交时间', '续费总金额', '续费订单基础版金额', 
                 '档位变化',
                 '金额档位(区间)', '金额档位(就近)',
-                '签约类型', '所在营销中心', '网校通业务代表'
+                '签约类型'
+		#  , '所在营销中心', '网校通业务代表'
             ]
             display_cols = [c for c in display_cols if c in filtered.columns]
             
@@ -475,7 +511,6 @@ def main():
             **档位分析：**
             - 升档/降档/不变/流失
             """)
-
 
 if __name__ == "__main__":
     main()
