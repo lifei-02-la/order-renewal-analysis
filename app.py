@@ -106,6 +106,21 @@ def add_expiry_and_consumption(df, current_time):
     
     return df
 
+def add_customer_renewal_status(df):
+    """添加客户维度的续费状态：取客户最后一个结束时间订单的'是否续费'作为客户状态"""
+    # 按客户ID和合作结束时间排序（降序），取第一个即最后一个订单
+    df_sorted = df.sort_values(['客户ID', '合作结束时间'], ascending=[True, False])
+    last_orders = df_sorted.groupby('客户ID').first().reset_index()
+    
+    # 取'是否续费'作为客户续费状态
+    last_orders = last_orders[['客户ID', '是否续费']]
+    last_orders.rename(columns={'是否续费': '客户续费状态'}, inplace=True)
+    
+    # 合并回原df
+    df = df.merge(last_orders, on='客户ID', how='left')
+    
+    return df
+
 def calculate_renewal(df):
     """计算续费相关字段"""
     
@@ -390,6 +405,9 @@ def main():
         # 新增：基于模拟当前时间计算到期和消耗字段
         filtered = add_expiry_and_consumption(filtered, simulated_current_time)
         
+        # 新增：计算客户维度的续费状态
+        filtered = add_customer_renewal_status(filtered)
+        
         # ========== 主区域：数据展示 ==========
         
         # 顶部指标卡片
@@ -432,7 +450,8 @@ def main():
                 '金额档位(区间)', '金额档位(就近)',
                 '签约类型',
                 # 新增字段
-                '当前订单是否已到期', '客户最后一个订单是否已到期', '消耗天数'
+                '当前订单是否已到期', '客户最后一个订单是否已到期', '消耗天数',
+                '客户续费状态'
             ]
             display_cols = [c for c in display_cols if c in filtered.columns]
             
