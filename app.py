@@ -75,6 +75,36 @@ def process_data(df):
     
     return result
 
+def add_expiry_and_consumption(df, current_time):
+    """添加到期和消耗相关字段，使用传入的 current_time"""
+    
+    # 1. 当前订单是否已到期
+    def is_expired(end_time):
+        if pd.isna(end_time):
+            return '未知'
+        return '是' if end_time < current_time else '否'
+    
+    df['当前订单是否已到期'] = df['合作结束时间'].apply(is_expired)
+    
+    # 2. 当前客户最后一个订单是否已到期
+    # 先找到每个客户最后一个订单的结束时间
+    last_order = df.groupby('客户ID')['合作结束时间'].max().reset_index()
+    last_order['客户最后一个订单是否已到期'] = last_order['合作结束时间'].apply(is_expired)
+    # 合并回原df
+    df = df.merge(last_order[['客户ID', '客户最后一个订单是否已到期']], on='客户ID', how='left')
+    
+    # 3. 消耗天数
+    def calculate_consumption(row):
+        if pd.isna(row['合作开始时间']) or pd.isna(row['合作结束时间']):
+            return None
+        if row['当前订单是否已到期'] == '是':
+            return 365
+        else:
+            return (current_time - row['合作开始时间']).days
+    
+    df['消耗天数'] = df.apply(calculate_consumption, axis=1)
+    
+    return df
 
 def calculate_renewal(df):
     """计算续费相关字段"""
@@ -261,6 +291,15 @@ def main():
             
             st.divider()
             
+            # 新增：模拟当前时间设置
+            simulated_current_time = st.datetime_input(
+                "模拟当前时间 (用于到期计算)",
+                value=datetime.now(),
+                help="设置一个自定义时间，用于计算到期和消耗天数。默认使用系统当前时间。"
+            )
+            
+            st.divider()
+            
             # 新增：基础版签约金额筛选
             if '基础版签约金额' in result.columns:
                 amount_col = '基础版签约金额'
@@ -348,6 +387,9 @@ def main():
         if type_filter and '客户类型' in filtered.columns:
             filtered = filtered[filtered['客户类型'].isin(type_filter)]
         
+        # 新增：基于模拟当前时间计算到期和消耗字段
+        filtered = add_expiry_and_consumption(filtered, simulated_current_time)
+        
         # ========== 主区域：数据展示 ==========
         
         # 顶部指标卡片
@@ -388,8 +430,9 @@ def main():
                 '续费订单提交时间', '续费总金额', '续费订单基础版金额', 
                 '档位变化',
                 '金额档位(区间)', '金额档位(就近)',
-                '签约类型'
-		#  , '所在营销中心', '网校通业务代表'
+                '签约类型',
+                # 新增字段
+                '当前订单是否已到期', '客户最后一个订单是否已到期', '消耗天数'
             ]
             display_cols = [c for c in display_cols if c in filtered.columns]
             
